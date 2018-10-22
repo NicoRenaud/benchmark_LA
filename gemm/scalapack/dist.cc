@@ -28,7 +28,7 @@ int getRootFactor( int n ) {
     return 1;
 }
 
-typedef Eigen::Matrix<double,Eigen::Dynamic,Eigen::Dynamic,Eigen::RowMajor> Mat;
+typedef Eigen::Matrix<double,Eigen::Dynamic,Eigen::Dynamic,Eigen::ColMajor> Mat;
 
 // conventions:
 // M_ by N_ matrix block-partitioned into MB_ by NB_ blocks, then
@@ -48,7 +48,7 @@ int main( int argc, char *argv[] ) {
     MKL_INT myrank, commSize;
     blacs_pinfo_( &myrank, &commSize );
 
-    MKL_INT size = 100;
+    MKL_INT size = 4;
     MKL_INT nprows = getRootFactor( commSize );
     MKL_INT npcols = commSize / nprows;
 
@@ -71,25 +71,42 @@ int main( int argc, char *argv[] ) {
     MKL_INT nb = std::min(size/commSize,NB_MAX);
 
     // local matrix only held by root
-    double *Alocal, *Blocal, *Clocal;
+    double *Alocal = NULL, *Blocal = NULL, *Clocal = NULL;
+    Mat dataA, dataB;
     if( (myrow == 0) && (mycol == 0) ) {
 
-        Mat dataA = Mat::Random(size,size);
-        Alocal = &dataA(0);
+        dataA = Mat::Random(size,size);
+        Alocal = dataA.data();
+        std::cout << "Eigen A : \n" << dataA << std::endl;
 
-        Mat dataB = Mat::Random(size,size);
-        Blocal = &dataB(0);
+        dataB = Mat::Random(size,size);
+        Blocal = dataB.data();
+        std::cout << "Eigen B : \n" << dataB << std::endl;
+
+        std::cout << "A*B \n" << dataA*dataB << std::endl;
 
         Clocal = static_cast<double*>(std::calloc(size*size,sizeof(double)));
     }
 
-    else
-    {
-        Alocal = NULL;
-        Blocal = NULL;
-        Clocal = NULL;
+    if( (myrow == 0) && (mycol == 0) ) {
+        std::cout << "Aloca" << std::endl;
+        for (int i=0; i<size; i++){
+            for(int j=0; j<size; j++){
+                std::cout << Alocal[i*size+j] << " ";
+            }
+            std::cout << std::endl;
+        }
     }
-        
+
+    if( (myrow == 0) && (mycol == 0) ) {
+        std::cout << "Bloca" << std::endl;
+        for (int i=0; i<size; i++){
+            for(int j=0; j<size; j++){
+                std::cout << Blocal[i*size+j] << " ";
+            }
+            std::cout << std::endl;
+        }
+    }
     // distributed matrix
     double *Adist, *Bdist, *Cdist;
     int mp = numroc_( &size, &nb, &myrow, &i_zero, &nprows ); // mp number rows owned by this process
@@ -114,15 +131,16 @@ int main( int argc, char *argv[] ) {
     descinit_(descb_dist, &size, &size, &nb, &nb, &i_zero, &i_zero, &ictxt, &lld, &info);
     descinit_(descc_dist, &size, &size, &nb, &nb, &i_zero, &i_zero, &ictxt, &lld, &info);
 
+
     // Distribute the matrices from process 0 over the grid
     pdgeadd_(&trans, &size, &size, &one, Alocal, &i_one, &i_one, desca_local, &zero, Adist, &i_one, &i_one, desca_dist);
     pdgeadd_(&trans, &size, &size, &one, Blocal, &i_one, &i_one, descb_local, &zero, Bdist, &i_one, &i_one, descb_dist);
 
-    if (myrank == 0)
-        std::cout << "Arrays are distributed with pdgeadd" << std::endl;
+    if( myrank == 0 ) 
+        std::cout << "Matrices distributed with pdgeadd_" << std::endl;
 
     // compute C = A * B
-    pdgemm_( "N", "N", &size, &size, &size, &one, Adist, &i_one, &i_one, desca_dist, Bdist, &i_one, &i_one, descb_dist,
+    pdgemm_( &trans, &trans, &size, &size, &size, &one, Adist, &i_one, &i_one, desca_dist, Bdist, &i_one, &i_one, descb_dist,
              &zero, Cdist, &i_one, &i_one, descc_dist );
 
     if( myrank == 0 ) 
@@ -131,6 +149,19 @@ int main( int argc, char *argv[] ) {
     // copy result in local matrix
     pdgeadd_("N",&size,&size,&one,Cdist,&i_one,&i_one,descc_dist,&zero,Clocal,&i_one,&i_one,descc_local);
 
+    if ((myrow == 0) && (mycol == 0))
+    {
+        // std::cout << "Adist" << std::endl;
+        // for (int i=0; i<size; i++){
+        //     for(int j=0; j<size; j++){
+        //         std::cout << Alocal[i*size+j] << " ";
+        //     }
+        //     std::cout << std::endl;
+        //}
+        double *Ceigen;
+        new (Ceigen) Eigen::Map<Eigen::Matrix<double,Eigen::Dynamic,Eigen::Dynamic>> (Clocal,size,size);
+        std::cout << "Cdist \n" << Eigen::Map<Eigen::Matrix<double,Eigen::Dynamic,Eigen::Dynamic>> (Clocal,size,size) << std::endl;
+    }
     blacs_gridexit_( &ictxt );
     blacs_exit_(&i_zero);
     return(0);
