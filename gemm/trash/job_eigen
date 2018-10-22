@@ -1,0 +1,11 @@
+#!/bin/bash
+
+#export OPENBLAS_NUM_THREADS=4
+#export GOTO_NUM_THREADS=4
+#SIZE=4000
+
+export OMP_NUM_THREADS=4
+./eigen --size $SIZE
+
+export OMP_NUM_THREADS=1
+./eigen --size $SIZE
