@@ -1,0 +1,7 @@
+#!/bin/bash
+#export OPENBLAS_NUM_THREADS=4
+#export GOTO_NUM_THREADS=4
+
+SIZE=4000
+mpirun -n 1 ./scalapack --size $SIZE
+mpirun -n 2 ./scalapack --size $SIZE

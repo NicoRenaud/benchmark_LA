@@ -6,9 +6,9 @@
 #include <mkl_blacs.h>
 #include <Eigen/Dense>
 #include <Eigen/Core>
-#include "nanotimer.h"
-//#include "args.h"
-#include "stringhelper.h"
+#include <chrono>
+#include <cxxopts.hpp>
+
 
 /*
 main example
@@ -39,28 +39,53 @@ typedef Eigen::Matrix<double,Eigen::Dynamic,Eigen::Dynamic,Eigen::ColMajor> Mat;
 int main( int argc, char *argv[] ) {
 
 
-    // get the blacs context
+    // Define constants
     MKL_INT i_negone = -1, i_zero = 0, i_one = 1;
     const double zero = 0.0e+0, one = 1.0e+0, two = 2.0e+0, negone = -1.0E+0;
+    bool print = false;
     const char trans = 'N';
     MKL_INT ictxt, info;
 
+    // Get blacs info
     MKL_INT myrank, commSize;
     blacs_pinfo_( &myrank, &commSize );
 
-    MKL_INT size = 4;
+    // MPI size
     MKL_INT nprows = getRootFactor( commSize );
     MKL_INT npcols = commSize / nprows;
 
+    // Parse input
+    MKL_INT size;
+    try 
+    {
+        cxxopts::Options options(argv[0], " - PDGEMM example with Scalapack");
+        options
+         .positional_help("[optional args]")
+         .show_positional_help();
+
+        options.add_options()
+            ("size", "dimension of the matrix", cxxopts::value<int>(), "M");
+
+        auto result = options.parse(argc,argv);
+        size = static_cast<MKL_INT>(result["size"].as<int>());
+
+    } catch (const cxxopts::OptionException& e)
+    {
+        std::cout << "error parsing options: " << e.what() << std::endl;
+        exit(1);
+    }
+
+    // print
     if( myrank == 0 ) 
-        std::cout << "grid: " << nprows << " x " << npcols << std::endl;
+    {
+        std::cout << "Matrix size : " << size << "x" << size << std::endl;
+        std::cout << "Num Procs   : " << commSize << std::endl;
+        std::cout << "Grid        : " << nprows << " x " << npcols << std::endl;
+    }
 
     // init BLACS
     blacs_get_( &i_negone, &i_zero, &ictxt );
     blacs_gridinit_( &ictxt, "C", &commSize, &i_one );
-
-    if( myrank == 0 ) 
-        std::cout << "system context " << ictxt << " grid context: " << ictxt << std::endl;
 
     // create the grid
     MKL_INT myrow, mycol;
@@ -77,36 +102,21 @@ int main( int argc, char *argv[] ) {
 
         dataA = Mat::Random(size,size);
         Alocal = dataA.data();
-        std::cout << "Eigen A : \n" << dataA << std::endl;
+        
 
         dataB = Mat::Random(size,size);
         Blocal = dataB.data();
-        std::cout << "Eigen B : \n" << dataB << std::endl;
 
-        std::cout << "A*B \n" << dataA*dataB << std::endl;
+        if ( print )
+        {
+            std::cout << "Eigen A : \n" << dataA << std::endl << std::endl;
+            std::cout << "Eigen B : \n" << dataB << std::endl << std::endl;
+            std::cout << "A*B \n" << dataA*dataB << std::endl << std::endl;
+        }
 
         Clocal = static_cast<double*>(std::calloc(size*size,sizeof(double)));
     }
 
-    if( (myrow == 0) && (mycol == 0) ) {
-        std::cout << "Aloca" << std::endl;
-        for (int i=0; i<size; i++){
-            for(int j=0; j<size; j++){
-                std::cout << Alocal[i*size+j] << " ";
-            }
-            std::cout << std::endl;
-        }
-    }
-
-    if( (myrow == 0) && (mycol == 0) ) {
-        std::cout << "Bloca" << std::endl;
-        for (int i=0; i<size; i++){
-            for(int j=0; j<size; j++){
-                std::cout << Blocal[i*size+j] << " ";
-            }
-            std::cout << std::endl;
-        }
-    }
     // distributed matrix
     double *Adist, *Bdist, *Cdist;
     int mp = numroc_( &size, &nb, &myrow, &i_zero, &nprows ); // mp number rows owned by this process
@@ -136,32 +146,58 @@ int main( int argc, char *argv[] ) {
     pdgeadd_(&trans, &size, &size, &one, Alocal, &i_one, &i_one, desca_local, &zero, Adist, &i_one, &i_one, desca_dist);
     pdgeadd_(&trans, &size, &size, &one, Blocal, &i_one, &i_one, descb_local, &zero, Bdist, &i_one, &i_one, descb_dist);
 
-    if( myrank == 0 ) 
-        std::cout << "Matrices distributed with pdgeadd_" << std::endl;
+
+    // start chrono
+    std::chrono::time_point<std::chrono::system_clock> start, end;
+    if (myrank == 0)
+        start = std::chrono::system_clock::now();
 
     // compute C = A * B
     pdgemm_( &trans, &trans, &size, &size, &size, &one, Adist, &i_one, &i_one, desca_dist, Bdist, &i_one, &i_one, descb_dist,
              &zero, Cdist, &i_one, &i_one, descc_dist );
 
-    if( myrank == 0 ) 
-        std::cout << "Multiplication A*B=C is done ( pdgemm )" << std::endl;
-
+    // end chrono
+    if (myrank == 0)
+    {   
+        end = std::chrono::system_clock::now();
+        std::chrono::duration<double> elapsed_time = end-start;
+        std::cout << "Run time    : " << elapsed_time.count() << " secs" <<  std::endl;
+    }
+    
     // copy result in local matrix
     pdgeadd_("N",&size,&size,&one,Cdist,&i_one,&i_one,descc_dist,&zero,Clocal,&i_one,&i_one,descc_local);
 
     if ((myrow == 0) && (mycol == 0))
     {
-        // std::cout << "Adist" << std::endl;
-        // for (int i=0; i<size; i++){
-        //     for(int j=0; j<size; j++){
-        //         std::cout << Alocal[i*size+j] << " ";
-        //     }
-        //     std::cout << std::endl;
-        //}
-        double *Ceigen;
-        new (Ceigen) Eigen::Map<Eigen::Matrix<double,Eigen::Dynamic,Eigen::Dynamic>> (Clocal,size,size);
-        std::cout << "Cdist \n" << Eigen::Map<Eigen::Matrix<double,Eigen::Dynamic,Eigen::Dynamic>> (Clocal,size,size) << std::endl;
+        if( print )
+        {
+            // Print Alocal
+            std::cout << "Alocal" << std::endl;
+            for (int i=0; i<size; i++){
+                for(int j=0; j<size; j++){
+                    std::cout << Alocal[i*size+j] << " ";
+                }
+                std::cout << std::endl;
+            }
+
+            // Print Blocal
+            std::cout << "Blocal" << std::endl;
+            for (int i=0; i<size; i++){
+                for(int j=0; j<size; j++){
+                    std::cout << Blocal[i*size+j] << " ";
+                }
+                std::cout << std::endl;
+            }  
+
+            // copy the Clocal in an Eigen matrix
+            double *Ceigen;
+            new (Ceigen) Eigen::Map<Eigen::Matrix<double,Eigen::Dynamic,Eigen::Dynamic>> (Clocal,size,size);
+            std::cout << "Clocal \n" << Eigen::Map<Eigen::Matrix<double,Eigen::Dynamic,Eigen::Dynamic>> (Clocal,size,size) << std::endl;
+
+        }
     }
+
+    // termiante BLACS
     blacs_gridexit_( &ictxt );
     blacs_exit_(&i_zero);
     return(0);
