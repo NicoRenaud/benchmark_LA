@@ -43,7 +43,7 @@ int main (int argc, char *argv[])
                         El::Output(" Matrix size : ", size, "x", size);
                         El::Output(" Num Procs   : ", commSize);
                 
-                        int nthreads = openblas_get_num_threads();
+                        int nthreads = omp_thread_cout();
                         El::Output(" Num Threads : ", nthreads);
 
                         El::Matrix<double> A, B, C;

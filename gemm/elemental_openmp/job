@@ -1,10 +1,10 @@
 #!/bin/bash
 #export GOTO_NUM_THREADS=4
 
-SIZE=2000
+SIZE=4000
 
-export OPENBLAS_NUM_THREADS=1
+export OMP_NUM_THREADS=1
 ./elemental --size $SIZE
 
-export OPENBLAS_NUM_THREADS=2
+export OMP_NUM_THREADS=2
 ./elemental --size $SIZE
